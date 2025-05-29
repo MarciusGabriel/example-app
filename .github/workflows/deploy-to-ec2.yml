@@ -12,12 +12,45 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Copy files with SSH
-      uses: easingthemes/ssh-deploy@main
+      uses: easingthemes/ssh-deploy@main # Ou a versão mais recente, como v5.0.0
       env:
-        SSH_PRIVATE_KEY: ${{secrets.EC2_SSH_KEY}}
+        SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
         ARGS: "-rltgoDzvO --delete"
         SOURCE: "./"
-        REMOTE_HOST: "ec2-44-203-153-162.compute-1.amazonaws.com"
+        REMOTE_HOST: "ec2-44-203-153-162.compute-1.amazonaws.com" # Seu host EC2
         REMOTE_USER: "ubuntu"
         TARGET: "/var/www/html/example-app/"
-        EXCLUDE: "/dist/, /vendor/, /node_modules/, **.env"
+        EXCLUDE: "/dist/, /vendor/, /node_modules/, .env" # Mantido .env excluído
+        SCRIPT_AFTER: |
+          echo "Starting post-deployment script on EC2..."
+          cd /var/www/html/example-app
+          
+          echo "Installing Composer dependencies..."
+          composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev
+          
+          echo "Running database migrations..."
+          php artisan migrate --force
+          
+          echo "Setting ownership and permissions..."
+          # Garante que o usuário 'ubuntu' seja o dono e o grupo 'www-data' tenha acesso
+          # O www-data precisa escrever nos diretórios storage, bootstrap/cache e database (para SQLite)
+          sudo chown -R ubuntu:www-data storage bootstrap/cache database
+          sudo chmod -R 775 storage bootstrap/cache database # rwxrwxr-x
+          
+          # Garante que arquivos dentro desses diretórios sejam graváveis pelo grupo
+          # Isso é especialmente importante para o arquivo do SQLite e logs
+          sudo find /var/www/html/example-app/storage -type f -exec chmod 664 {} \;
+          sudo find /var/www/html/example-app/bootstrap/cache -type f -exec chmod 664 {} \;
+          # Se o arquivo database.sqlite existir, garantir sua permissão.
+          # O migrate pode criá-lo, então a permissão do diretório 'database' já deve ajudar.
+          if [ -f /var/www/html/example-app/database/database.sqlite ]; then
+            sudo chmod 664 /var/www/html/example-app/database/database.sqlite
+          fi
+          
+          echo "Clearing and caching optimizations..."
+          php artisan optimize:clear # Limpa caches antigos
+          php artisan config:cache
+          php artisan route:cache
+          php artisan view:cache
+          
+          echo "Deployment to EC2 completed successfully!"
